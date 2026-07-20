@@ -5,6 +5,11 @@ This repository contains the official implementation of the following paper:
 > **[Statistical Gradient Filtering for Geometry Optimization Under Limited Observations (ACM SIGGRAPH 2026)](https://wonjongg.me/assets/pdf/SGF.pdf)**<br>
 > Wonjong Jang, Gwangjin Ju, Seungyong Lee
 
+
+## Work in Progress
+
+I'm currently working on some updates to make this repository even better for you! Everything should be wrapped up by the first or second week of August 2026. Thanks for hanging tight!
+
 ## Installation
 
 ### 1. Clone the Repository
