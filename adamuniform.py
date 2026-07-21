@@ -1,19 +1,18 @@
 import torch
 
-class AdamPrecond(torch.optim.Optimizer):
+class AdamUniform(torch.optim.Optimizer):
     """
     Variant of Adam with uniform scaling by the second moment.
 
     Instead of dividing each component by the square root of its second moment,
     we divide all of them by the max.
     """
-    def __init__(self, params, precond_mat, lr=0.1, betas=(0.9,0.999)):
+    def __init__(self, params, lr=0.1, betas=(0.9,0.999)):
         defaults = dict(lr=lr, betas=betas)
-        super(AdamPrecond, self).__init__(params, defaults)
-        self.precond_mat = precond_mat
+        super(AdamUniform, self).__init__(params, defaults)
 
     def __setstate__(self, state):
-        super(AdamPrecond, self).__setstate__(state)
+        super(AdamUniform, self).__setstate__(state)
 
     @torch.no_grad()
     def step(self):
@@ -31,12 +30,12 @@ class AdamPrecond(torch.optim.Optimizer):
                 g1 = state["g1"]
                 g2 = state["g2"]
                 state["step"] += 1
-                grad = (self.precond_mat @ p.grad.data.reshape(-1)).reshape(p.grad.data.shape)
+                grad = p.grad.data
 
                 g1.mul_(b1).add_(grad, alpha=1-b1)
                 g2.mul_(b2).add_(grad.square(), alpha=1-b2)
                 m1 = g1 / (1-(b1**state["step"]))
-                m2 = g2 / (1-(b2**state["step"]))
+                # m2 = g2 / (1-(b2**state["step"]))
                 # This is the only modification we make to the original Adam algorithm
-                gr = (self.precond_mat @ m1.reshape(-1)).reshape(p.grad.data.shape)
+                gr = m1 # / (1e-8 + m2.sqrt().max())
                 p.data.sub_(gr, alpha=lr)

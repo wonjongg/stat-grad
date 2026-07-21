@@ -13,8 +13,8 @@ from pixel3dmm.utils.utils_3d import rotation_6d_to_matrix, matrix_to_rotation_6
 from pixel3dmm.tracking import nvdiffrast_util, util
 
 # ------ 
-from adamprecond import AdamPrecond
-from renderer_simple import NormalRenderer
+from adamuniform import AdamUniform
+from renderer import NormalRenderer
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
@@ -96,7 +96,6 @@ class TrackerBase(ABC):
         self.weight_lm = 1.0
         self.weight_reg = 1.0
         self.weight_mask = 50.0
-        self.reg_on = False
 
         console.print("[bold green]✓[/bold green] TrackerSimple initialized successfully!")
 
@@ -422,7 +421,8 @@ class TrackerBase(ABC):
 
         pp3d.write_mesh(canonical_vertices[0].detach().cpu().numpy(), self.diff_renderer.faces[0].detach().cpu().numpy(), os.path.join(self.optimization_vis_folder, 'test.obj'))
         # Create optimizable vertex offsets IN CANONICAL SPACE
-        vertex_offsets_canonical = nn.Parameter(torch.zeros_like(canonical_vertices)[:, :self.FLAME_EYE_IDX])
+        shape_offsets = nn.Parameter(torch.zeros_like(canonical_vertices)[:, :self.FLAME_EYE_IDX])
+        exp_offsets = nn.Parameter(torch.zeros_like(canonical_vertices)[:, :self.FLAME_EYE_IDX])
         eyes_offsets = torch.zeros_like(canonical_vertices)[:, self.FLAME_EYE_IDX:]
         
         # Fixed transformation parameters
@@ -443,18 +443,23 @@ class TrackerBase(ABC):
         basis = torch.cat([self.shape_basis, self.exp_basis], dim=-1)
         std = torch.cat([self.shape_std, self.exp_std], dim=-1)
 
-        alpha1 = 1 / (30 + 1)
-        alpha2 = 0.2
+        alpha1 = 1 / (self.beta + 1)
         # Setup optimizer
-        eigvals =  std ** 2 + alpha2
-        proj_mat = basis @ torch.diag(eigvals) @ basis.T
-        proj_mat_pure = basis @ basis.T
+        shape_eigvals = self.shape_std ** 2
+        exp_eigvals = self.exp_std ** 2
+        shape_eig_max = shape_eigvals.max()
+        exp_eig_max = exp_eigvals.max()
 
-        precond_mat = (1 - alpha1) * proj_mat + alpha1 * torch.eye(proj_mat.shape[0]).type_as(proj_mat)
-        null_proj_mat = torch.eye(proj_mat_pure.shape[0]).type_as(proj_mat_pure) - proj_mat_pure
+        shape_eigvals = (shape_eigvals / shape_eig_max) + self.eps
+        exp_eigvals = (exp_eigvals / exp_eig_max) + self.eps
 
-        self.optimizer = self.configure_optimizer(vertex_offsets_canonical, precond_mat)
-        # optimizer = AdamPrecond([vertex_offsets_canonical], precond_mat, lr=0.01)
+        shape_proj_mat = self.shape_basis @ torch.diag(shape_eigvals) @ self.shape_basis.T
+        exp_proj_mat = self.exp_basis @ torch.diag(exp_eigvals) @ self.exp_basis.T
+
+        shape_precond_mat = (1 - alpha1) * shape_proj_mat + alpha1 * torch.eye(shape_proj_mat.shape[0]).type_as(shape_proj_mat)
+        exp_precond_mat = (1 - alpha1) * exp_proj_mat + alpha1 * torch.eye(exp_proj_mat.shape[0]).type_as(exp_proj_mat)
+
+        self.optimizer = self.configure_optimizer(shape_offsets, exp_offsets)
         
         # Get MVP matrix
         r_mvps = self._get_mvp_matrix(focal_length, principal_point, R_base, t_base)
@@ -491,11 +496,13 @@ class TrackerBase(ABC):
             
             for iteration in range(num_iterations):
                 self.optimizer.zero_grad()
-                
                 # STEP 1: Apply offsets in canonical space
-                verts_offset = torch.cat([vertex_offsets_canonical, eyes_offsets], dim=1)
-                optimized_canonical_vertices = canonical_vertices + verts_offset
-                optimized_canonical_vertices_noneck = canonical_vertices_noneck + verts_offset
+                shape_offsets_eye = torch.cat([shape_offsets, eyes_offsets], dim=1)
+                exp_offsets_eye = torch.cat([exp_offsets, eyes_offsets], dim=1)
+
+                proj_offsets = (shape_precond_mat @ (shape_offsets_eye).reshape(-1)).reshape(-1, 3) + (exp_precond_mat @ (exp_offsets_eye).reshape(-1)).reshape(-1, 3)
+                optimized_canonical_vertices = canonical_vertices + proj_offsets
+                optimized_canonical_vertices_noneck = canonical_vertices_noneck + proj_offsets
                 
                 # STEP 2: Transform from canonical space to world space
                 optimized_world_vertices = self.apply_transformation(optimized_canonical_vertices, R, t)
@@ -581,10 +588,6 @@ class TrackerBase(ABC):
                     ) * 0.0 
                     '''
 
-                # 3. Regularization losses
-                if self.reg_on:
-                    losses['offset_reg'] = self.weight_reg * torch.norm(null_proj_mat @ vertex_offsets_canonical.reshape(-1)) ** 2
-                
                 # Total loss
                 total_loss = sum(losses.values())
                 
@@ -614,8 +617,6 @@ class TrackerBase(ABC):
                     loss_info += f" | normal: {losses['normal'].item():.4f}"
                 if 'lmk_eye' in losses:
                     loss_info += f" | lmk: {losses['lmk_eye'].item():.4f}"
-                if 'offset_reg' in losses:
-                    loss_info += f" | reg: {losses['offset_reg'].item():.4f}"
                 if 'hole' in losses:
                     loss_info += f" | hole: {losses['hole'].item():.4f}"
                 if 'skin' in losses:
@@ -827,13 +828,17 @@ class TrackerBase(ABC):
 class TrackerStat(TrackerBase):
     def __init__(self, config):
         super().__init__(config)
+        self.beta = 30
+        self.eps = 0.3
         self.weight_lm = 0 
         self.weight_reg = 0
 
+        self.lr = 0.01
+
         print("stat preconditioner")
 
-    def configure_optimizer(self, opt_vars, precond_mat):
-        return AdamPrecond([opt_vars], precond_mat, lr=0.01)
+    def configure_optimizer(self, shape_vars, exp_vars):
+        return AdamUniform([shape_vars, exp_vars], lr=self.lr)
 
 
 def main(cfg):
