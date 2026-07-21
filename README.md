@@ -6,10 +6,6 @@ This repository contains the official implementation of the following paper:
 > Wonjong Jang, Gwangjin Ju, Seungyong Lee
 
 
-## Work in Progress
-
-I'm currently working on some updates to make this repository even better for you! Everything should be wrapped up by the first or second week of August 2026. Thanks for hanging tight!
-
 ## Installation
 
 ### 1. Clone the Repository
