@@ -6,6 +6,10 @@ This repository contains the official implementation of the following paper:
 > Wonjong Jang, Gwangjin Ju, Seungyong Lee
 
 
+## Demo
+
+![Vertex optimization on two example frames](media/demo.gif)
+
 ## Installation
 
 ### 1. Clone the Repository
